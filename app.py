@@ -19,7 +19,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data
+# 每 5 分钟重新读一次 CSV（线上自动拿到最新数据）
+@st.cache_data(ttl=300)
 def load_data():
     df = pd.read_csv("data/history.csv")
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
@@ -27,19 +28,19 @@ def load_data():
     return df
 
 def days_since(d):
+    """返回从发布时间到现在的天数；兼容 tz-naive / tz-aware。"""
     if pd.isna(d):
         return None
-    # 发布时间 -> UTC
+
+    # 将发布时间统一到 UTC
     if getattr(d, "tzinfo", None) is None:
         d_utc = d.tz_localize("UTC")
     else:
         d_utc = d.tz_convert("UTC")
-    # 当前时间 -> UTC
-    now = pd.Timestamp.utcnow()
-    if getattr(now, "tzinfo", None) is None:
-        now_utc = now.tz_localize("UTC")
-    else:
-        now_utc = now.tz_convert("UTC")
+
+    # 直接拿带时区的当前 UTC 时间（避免再 tz_localize/convert 造成冲突）
+    now_utc = pd.Timestamp.now(tz="UTC")
+
     return (now_utc - d_utc).days
 
 df = load_data()
