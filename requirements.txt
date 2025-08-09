@@ -6,3 +6,4 @@ pytz
 python-dateutil
 vl-convert-python    # 如果你用到了导出 PNG
 streamlit-autorefresh # （可选）用了自动刷新就保留
+requests
