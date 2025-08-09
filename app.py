@@ -1,3 +1,4 @@
+# app.py —— 只读 CSV 的 Streamlit 看板（无外部 API 调用）
 import pandas as pd
 import altair as alt
 import streamlit as st
@@ -7,19 +8,22 @@ import tempfile
 
 st.set_page_config(page_title="YouTube Tracker", layout="wide")
 
+# 可选：页面自动刷新（若未安装则自动跳过）
+try:
+    from streamlit_autorefresh import st_autorefresh
+    st_autorefresh(interval=5 * 60 * 1000, key="auto-refresh")  # 每5分钟刷新一次页面
+except Exception:
+    pass
+
 # ---- 小样式：让左侧缩略图垂直居中 ----
 st.markdown("""
 <style>
-.thumb-cell {
-  display: flex;
-  align-items: center;
-  height: 100%;
-}
+.thumb-cell { display: flex; align-items: center; height: 100%; }
 .thumb-cell img { max-width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
-# 每 5 分钟重新读一次 CSV（线上自动拿到最新数据）
+# 每5分钟重新读一次 CSV（线上自动拿到最新数据）
 @st.cache_data(ttl=300)
 def load_data():
     df = pd.read_csv("data/history.csv")
@@ -31,24 +35,21 @@ def days_since(d):
     """返回从发布时间到现在的天数；兼容 tz-naive / tz-aware。"""
     if pd.isna(d):
         return None
-
-    # 将发布时间统一到 UTC
+    # 发布时间统一到 UTC
     if getattr(d, "tzinfo", None) is None:
         d_utc = d.tz_localize("UTC")
     else:
         d_utc = d.tz_convert("UTC")
-
-    # 直接拿带时区的当前 UTC 时间（避免再 tz_localize/convert 造成冲突）
+    # 当前 UTC
     now_utc = pd.Timestamp.now(tz="UTC")
-
     return (now_utc - d_utc).days
 
 df = load_data()
 
-st.title("📈 YouTube 视频追踪面板")
+st.title("📈 YouTube 视频追踪面板（只读 CSV）")
 
 if df.empty:
-    st.info("暂无数据，请先运行抓取脚本 fetch_stats.py")
+    st.info("暂无数据，请先确保仓库中的 data/history.csv 已有内容。")
     st.stop()
 
 # 每个视频最新一行（总计信息）
@@ -58,7 +59,7 @@ latest = latest.sort_values("published_at", ascending=False, na_position="last")
 
 # -------- 侧边筛选 --------
 with st.sidebar:
-    st.header("筛选")
+    st.header("筛选 & 工具")
 
     # 频道筛选（含 All）
     channels = sorted(latest["channel_title"].dropna().unique().tolist())
@@ -91,13 +92,19 @@ with st.sidebar:
     else:
         start_date, end_date = (min_date, max_date)
 
-    # 侧边“排序依据” —— 含“按发布日期（新→旧）”
+    # 排序依据（含“按发布日期（新→旧）”）
     sort_label = st.selectbox(
         "排序依据",
         ["按播放量", "按点赞数", "按评论数", "按发布日期（新→旧）"],
         index=3
     )
     sort_map = {"按播放量": "views", "按点赞数": "likes", "按评论数": "comments"}
+
+    st.write("---")
+    # 手动刷新按钮（清缓存并重跑）
+    if st.button("🔄 刷新数据（清缓存）"):
+        st.cache_data.clear()
+        st.experimental_rerun()
 
 # 根据频道筛选
 filtered_latest = latest if sel_channel == "All" else latest[latest["channel_title"] == sel_channel]
@@ -118,7 +125,7 @@ end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=
 show_df_for_chart = show_df[(show_df["date"] >= start_ts) & (show_df["date"] <= end_ts)].copy()
 
 st.caption(
-    f"数据按天记录；折线图支持切换【{metric_cn}】与【{mode}】。频道：{sel_channel} ｜ 视频数：{filtered_latest.shape[0]}"
+    f"数据按天记录；折线图支持切换与。频道：{sel_channel} ｜ 视频数：{filtered_latest.shape[0]}"
 )
 
 # 全局 KPI（总量/率）：针对当前频道筛选（各视频“最新一行”加总）
@@ -239,7 +246,6 @@ else:
     # 图例点击显隐交互：legend 绑定的 selection
     legend_sel = alt.selection_point(fields=["label"], bind="legend", toggle=True)
 
-    # 只渲染被选中的曲线；当 selection 为空时（未选择任何图例），默认显示全部
     compare_chart = (
         alt.Chart(cmp)
            .transform_filter(legend_sel)
@@ -257,7 +263,6 @@ else:
            .add_params(legend_sel)
            .properties(height=360)
     )
-
     st.altair_chart(compare_chart, use_container_width=True)
 
     # 下载 CSV
@@ -269,7 +274,7 @@ else:
         mime="text/csv"
     )
 
-    # 下载 PNG（需要 vl-convert-python）
+    # 下载 PNG（需要 vl-convert-python；未安装会提示）
     png_ready = True
     png_bytes = None
     try:
@@ -280,7 +285,7 @@ else:
                 png_bytes = f.read()
     except Exception:
         png_ready = False
-        st.info("如需导出 PNG，请在虚拟环境安装：`pip install vl-convert-python`，装好后刷新页面。")
+        st.info("如需导出 PNG，请在环境中安装：`pip install vl-convert-python`，装好后刷新页面。")
 
     if png_ready and png_bytes:
         st.download_button(
@@ -291,4 +296,4 @@ else:
         )
 
 st.write("---")
-st.caption("时区：America/Los_Angeles（抓取脚本按此时区记日期）。")
+st.caption("数据来源：仓库内 data/history.csv（由定时任务更新）。时区：America/Los_Angeles。")
