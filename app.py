@@ -46,7 +46,7 @@ def days_since(d):
 
 df = load_data()
 
-st.title("📈 YouTube 视频追踪面板（只读 CSV）")
+st.title("📈 YouTube 视频追踪面板")
 
 if df.empty:
     st.info("暂无数据，请先确保仓库中的 data/history.csv 已有内容。")
