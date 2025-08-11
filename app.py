@@ -197,20 +197,25 @@ for _, row in filtered_latest.iterrows():
             vhist["value"] = vhist[metric_col]
             y_title = f"{metric_cn}（累计）"
 
-        chart = (
-            alt.Chart(vhist)
-               .mark_line()
-               .encode(
-                   x=alt.X("date:T", title="日期"),
-                   y=alt.Y("value:Q", title=y_title),
-                   tooltip=[
-                       alt.Tooltip("date:T", title="日期"),
-                       alt.Tooltip("value:Q", title=y_title)
-                   ]
-               )
-               .properties(height=220)
-        )
-        st.altair_chart(chart, use_container_width=True)
+base = (
+    alt.Chart(vhist)
+       .encode(
+           x=alt.X("date:T", title="日期"),
+           y=alt.Y("value:Q", title=y_title),
+           tooltip=[
+               alt.Tooltip("date:T", title="日期"),
+               alt.Tooltip("value:Q", title=y_title, format=",")
+           ]
+       )
+)
+
+line = base.mark_line()
+points = base.mark_point(size=40)
+labels = base.mark_text(dy=-8).encode(text=alt.Text("value:Q", format=","))
+
+chart = (line + points + labels).properties(height=220)
+st.altair_chart(chart, use_container_width=True)
+
 
 # ====== 多视频对比（一张图） + 下载按钮（支持图例点击显隐）=====
 st.write("---")
