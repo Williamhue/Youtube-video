@@ -2,9 +2,8 @@ name: Daily YouTube Fetch
 
 on:
   schedule:
-    # GitHub Actions 使用 UTC；LA 00:00 ≈ 夏令时 07:00、冬令时 08:00
-    - cron: "0 7 * * *"
-    - cron: "0 8 * * *"
+    - cron: "0 7 * * *"   # LA 00:00（夏令时）
+    - cron: "0 8 * * *"   # LA 00:00（冬令时）
   workflow_dispatch: {}
 
 permissions:
@@ -36,12 +35,12 @@ jobs:
       - name: Run fetch_stats.py
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          # 如需代理：在仓库 Secrets 配好后再打开
+          # 如需代理：在 Secrets 配好后再放开
           # HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
           # HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
         run: python fetch_stats.py
 
-      - name: Commit & push data/history.csv (force-with-lease)
+      - name: Commit & push data/history.csv (rebase, then force-with-lease)
         env:
           GIT_AUTHOR_NAME: github-actions[bot]
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
@@ -52,9 +51,6 @@ jobs:
           git status
           git add data/history.csv || true
           git diff --cached --quiet && echo "No changes to commit" || git commit -m "chore: daily fetch (auto)"
-          # 与远端对齐，避免 non-fast-forward
           git fetch origin main
-          # 先尝试 rebase；若冲突，回滚 rebase 并用 ours 合并兜底（保留本次生成的 CSV）
           git rebase origin/main || (git rebase --abort && git merge -s ours origin/main -m "merge origin/main (ours for CSV)")
-          # 推送（带 --force-with-lease，安全强推）
           git push --force-with-lease origin HEAD:main
