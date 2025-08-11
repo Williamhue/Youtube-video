@@ -349,7 +349,6 @@ else:
             "发布日期": pub_text,
             "区间开始": first_dt.tz_convert("UTC").date().isoformat(),
             "区间结束": last_dt.tz_convert("UTC").date().isoformat(),
-            "数据点数": points_cnt,
             metric_label_cn: int(metric_val) if pd.notna(metric_val) else 0,
             "日均值": round(avg_val, 2) if pd.notna(avg_val) else 0,
             peak_label_cn: int(peak_val) if pd.notna(peak_val) else 0,
@@ -361,7 +360,7 @@ else:
     st.markdown("#### 📋 对比表格（当前指标 & 模式下的区间表现）")
     st.dataframe(
         summary_df[
-            ["视频标题", "频道", "视频ID", "发布日期", "区间开始", "区间结束", "数据点数",
+            ["视频标题", "频道", "视频ID", "发布日期", "区间开始", "区间结束",
              metric_label_cn, "日均值", peak_label_cn, "链接"]
         ],
         use_container_width=True,
