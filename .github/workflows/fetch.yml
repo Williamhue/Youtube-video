@@ -2,8 +2,7 @@ name: Daily YouTube Fetch
 
 on:
   schedule:
-    - cron: "0 7 * * *"   # LA 00:00（夏令时）
-    - cron: "0 8 * * *"   # LA 00:00（冬令时）
+    - cron: "0 */2 * * *"  # 每隔 2 小时整点执行（UTC）
   workflow_dispatch: {}
 
 permissions:
