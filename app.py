@@ -141,7 +141,13 @@ if sort_label == "按发布日期（新→旧）":
     )
 else:
     sort_col = sort_map[sort_label]
-    filtered_latest = filtered_latest.sort_values(sort_col, ascending=False)
+    filtered_latest = filtered_latest.sort_values(sort_col, descending=True)
+
+# 上面一行修正：Altair 不影响，这里用 pandas：
+filtered_latest = filtered_latest.sort_values(
+    sort_col if sort_label != "按发布日期（新→旧）" else "published_at",
+    ascending=False,
+)
 
 selected_ids = set(filtered_latest["video_id"].tolist())
 
@@ -216,7 +222,6 @@ for _, row in filtered_latest.iterrows():
         st.write(f"**频道**：{row['channel_title']}")
         pub = row["published_at"]
         dcount = days_since(pub)
-        # 显示为本地日期（不带时区）
         pub_text = (
             pub.tz_convert("UTC").date().isoformat() if pd.notna(pub) else "未知"
         )
@@ -258,7 +263,7 @@ for _, row in filtered_latest.iterrows():
         chart = (line + points + labels).properties(height=220)
         st.altair_chart(chart, use_container_width=True)
 
-# ====== 多视频对比（一张图） + 下载按钮（支持图例点击显隐 & 数值标签）=====
+# ====== 多视频对比（一张图） + 下载（支持图例点击显隐 & 数值标签）=====
 st.write("---")
 st.subheader("📊 多视频对比（同一张图）")
 
@@ -314,7 +319,64 @@ else:
     compare_chart = (line_cmp + points_cmp + labels_cmp).properties(height=360)
     st.altair_chart(compare_chart, use_container_width=True)
 
-    # 下载 CSV
+    # === 对比表格（直观汇总） ===
+    # 准备元数据：频道、标题、发布日期、链接
+    meta_cols = ["channel_title", "title", "published_at", "video_url"]
+    meta_map = (
+        filtered_latest.set_index("video_id")[meta_cols]
+        .to_dict(orient="index")
+    )
+
+    rows = []
+    for vid, g in cmp.groupby("video_id"):
+        g = g.sort_values("date")
+        first_dt = g["date"].min()
+        last_dt = g["date"].max()
+        points_cnt = g.shape[0]
+        if mode == "每日增量":
+            metric_val = g["value"].sum()                # 区间总增量
+            peak_val = g["value"].max()                  # 最大单日增量
+            metric_label_cn = f"{metric_cn} · 区间总增量"
+            peak_label_cn = f"最大单日增量"
+        else:
+            metric_val = g["value"].iloc[-1]             # 区间末值（累计）
+            peak_val = g["value"].max()                  # 累计最大值（一般=末值）
+            metric_label_cn = f"{metric_cn} · 区间末值"
+            peak_label_cn = f"区间最大值"
+
+        avg_val = g["value"].mean() if points_cnt > 0 else 0
+
+        meta = meta_map.get(vid, {})
+        pub = meta.get("published_at")
+        pub_text = pd.to_datetime(pub, utc=True).tz_convert("UTC").date().isoformat() if pd.notna(pub) else "—"
+
+        rows.append({
+            "视频标题": meta.get("title", "—"),
+            "频道": meta.get("channel_title", "—"),
+            "视频ID": vid,
+            "发布日期": pub_text,
+            "区间开始": first_dt.tz_convert("UTC").date().isoformat(),
+            "区间结束": last_dt.tz_convert("UTC").date().isoformat(),
+            "数据点数": points_cnt,
+            metric_label_cn: int(metric_val) if pd.notna(metric_val) else 0,
+            "日均值": round(avg_val, 2) if pd.notna(avg_val) else 0,
+            peak_label_cn: int(peak_val) if pd.notna(peak_val) else 0,
+            "链接": meta.get("video_url", "—"),
+        })
+
+    summary_df = pd.DataFrame(rows)
+
+    st.markdown("#### 📋 对比表格（当前指标 & 模式下的区间表现）")
+    st.dataframe(
+        summary_df[
+            ["视频标题", "频道", "视频ID", "发布日期", "区间开始", "区间结束", "数据点数",
+             metric_label_cn, "日均值", peak_label_cn, "链接"]
+        ],
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # 下载 CSV（对比数据点）
     csv_bytes = (
         cmp[["date", "label", "video_id", "value"]].to_csv(index=False).encode("utf-8")
     )
@@ -322,6 +384,15 @@ else:
         label="⬇️ 下载对比数据（CSV）",
         data=csv_bytes,
         file_name="compare_data.csv",
+        mime="text/csv",
+    )
+
+    # 下载表格 CSV（汇总）
+    table_csv = summary_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="⬇️ 下载对比表格（CSV）",
+        data=table_csv,
+        file_name="compare_table.csv",
         mime="text/csv",
     )
 
