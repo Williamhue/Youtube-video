@@ -1,6 +1,5 @@
 # app.py —— 只读 CSV 的 Streamlit 看板（无外部 API 调用）
 import os
-import tempfile
 from datetime import date
 
 import altair as alt
@@ -141,13 +140,7 @@ if sort_label == "按发布日期（新→旧）":
     )
 else:
     sort_col = sort_map[sort_label]
-    filtered_latest = filtered_latest.sort_values(sort_col, descending=True)
-
-# 上面一行修正：Altair 不影响，这里用 pandas：
-filtered_latest = filtered_latest.sort_values(
-    sort_col if sort_label != "按发布日期（新→旧）" else "published_at",
-    ascending=False,
-)
+    filtered_latest = filtered_latest.sort_values(sort_col, ascending=False)
 
 selected_ids = set(filtered_latest["video_id"].tolist())
 
@@ -263,7 +256,7 @@ for _, row in filtered_latest.iterrows():
         chart = (line + points + labels).properties(height=220)
         st.altair_chart(chart, use_container_width=True)
 
-# ====== 多视频对比（一张图） + 下载（支持图例点击显隐 & 数值标签）=====
+# ====== 多视频对比（一张图） ======
 st.write("---")
 st.subheader("📊 多视频对比（同一张图）")
 
@@ -319,13 +312,9 @@ else:
     compare_chart = (line_cmp + points_cmp + labels_cmp).properties(height=360)
     st.altair_chart(compare_chart, use_container_width=True)
 
-    # === 对比表格（直观汇总） ===
-    # 准备元数据：频道、标题、发布日期、链接
+    # === 对比表格（直观汇总，仅保留下载表格 CSV） ===
     meta_cols = ["channel_title", "title", "published_at", "video_url"]
-    meta_map = (
-        filtered_latest.set_index("video_id")[meta_cols]
-        .to_dict(orient="index")
-    )
+    meta_map = filtered_latest.set_index("video_id")[meta_cols].to_dict(orient="index")
 
     rows = []
     for vid, g in cmp.groupby("video_id"):
@@ -348,7 +337,10 @@ else:
 
         meta = meta_map.get(vid, {})
         pub = meta.get("published_at")
-        pub_text = pd.to_datetime(pub, utc=True).tz_convert("UTC").date().isoformat() if pd.notna(pub) else "—"
+        pub_text = (
+            pd.to_datetime(pub, utc=True).tz_convert("UTC").date().isoformat()
+            if pd.notna(pub) else "—"
+        )
 
         rows.append({
             "视频标题": meta.get("title", "—"),
@@ -376,18 +368,7 @@ else:
         hide_index=True
     )
 
-    # 下载 CSV（对比数据点）
-    csv_bytes = (
-        cmp[["date", "label", "video_id", "value"]].to_csv(index=False).encode("utf-8")
-    )
-    st.download_button(
-        label="⬇️ 下载对比数据（CSV）",
-        data=csv_bytes,
-        file_name="compare_data.csv",
-        mime="text/csv",
-    )
-
-    # 下载表格 CSV（汇总）
+    # 仅保留：下载表格 CSV
     table_csv = summary_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="⬇️ 下载对比表格（CSV）",
@@ -395,27 +376,6 @@ else:
         file_name="compare_table.csv",
         mime="text/csv",
     )
-
-    # 下载 PNG（需要 vl-convert-python；未安装会提示）
-    png_ready = True
-    png_bytes = None
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            out_path = os.path.join(td, "compare.png")
-            compare_chart.save(out_path, format="png", scale_factor=2)
-            with open(out_path, "rb") as f:
-                png_bytes = f.read()
-    except Exception:
-        png_ready = False
-        st.info("如需导出 PNG，请安装：pip install vl-convert-python")
-
-    if png_ready and png_bytes:
-        st.download_button(
-            label="🖼️ 下载对比图（PNG）",
-            data=png_bytes,
-            file_name="compare_chart.png",
-            mime="image/png",
-        )
 
 st.write("---")
 st.caption("数据来源：data/history.csv（由定时任务更新）。时区：America/Los_Angeles。")
