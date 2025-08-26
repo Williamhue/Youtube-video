@@ -110,9 +110,13 @@ with st.sidebar:
     # 转为日期（去时区）
     min_date = min_d.tz_convert("UTC").date() if pd.notna(min_d) else date.today()
     max_date = max_d.tz_convert("UTC").date() if pd.notna(max_d) else date.today()
+
     picked = st.date_input("折线图日期范围", [min_date, max_date])
-    if isinstance(picked, list) and len(picked) == 2:
+    # 兼容 tuple/list；并做“开始>结束”时自动对调
+    if isinstance(picked, (list, tuple)) and len(picked) == 2:
         start_date, end_date = picked
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
     else:
         start_date, end_date = (min_date, max_date)
 
@@ -147,15 +151,12 @@ selected_ids = set(filtered_latest["video_id"].tolist())
 # 折线图数据：按日期范围过滤后的历史
 show_df = df[df["video_id"].isin(selected_ids)].copy()
 start_ts = pd.to_datetime(start_date)  # naive
-end_ts = (
-    pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-)  # naive
+end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # naive
 # 注意：df["date"] 是带 tz 的，比较时将过滤边界转为 UTC 带 tz
 start_ts = start_ts.tz_localize("UTC")
 end_ts = end_ts.tz_localize("UTC")
-show_df_for_chart = show_df[
-    (show_df["date"] >= start_ts) & (show_df["date"] <= end_ts)
-].copy()
+
+show_df_for_chart = show_df[(show_df["date"] >= start_ts) & (show_df["date"] <= end_ts)].copy()
 
 # 如果选择的结束日期 > 数据最新日期，提示
 data_max_day = max_date
@@ -181,23 +182,20 @@ k3.metric("总评论数（截至最新）", f"{total_comments:,}")
 k4.metric("Like Rate（点赞率）", f"{like_rate:.2f}%")
 k5.metric("Comment Rate（评论率）", f"{comment_rate:.2f}%")
 
-# 顶部 KPI 汇总（按当前日期筛选后的“区间增量”，全体视频）
-# 关键点：在“全量历史”上先计算每日增量，再按所选日期范围过滤
-base = df[df["video_id"].isin(selected_ids)].sort_values(["video_id", "date"]).copy()
-
+# ===== 顶部 KPI 汇总（严格按所选日期范围的“区间增量”） =====
+# 先在全量历史上计算“每日增量”，再按所选日期范围切片求和
+base_df = df[df["video_id"].isin(selected_ids)].sort_values(["video_id", "date"]).copy()
 for col in ["views", "likes", "comments"]:
     inc_col = f"{col}_inc"
-    base[inc_col] = base.groupby("video_id")[col].diff().fillna(0)
-    base.loc[base[inc_col] < 0, inc_col] = 0  # 防抖：出现回退时不计负增量
+    base_df[inc_col] = base_df.groupby("video_id")[col].diff().fillna(0)
+    base_df.loc[base_df[inc_col] < 0, inc_col] = 0  # 防抖：出现回退时不计负增量
 
-# 现在再用所选日期范围切片，保证区间第一天也能拿到正确的增量
-interval_df = base[(base["date"] >= start_ts) & (base["date"] <= end_ts)].copy()
+interval_df = base_df[(base_df["date"] >= start_ts) & (base_df["date"] <= end_ts)].copy()
 
 iv_views = int(interval_df["views_inc"].sum()) if not interval_df.empty else 0
 iv_likes = int(interval_df["likes_inc"].sum()) if not interval_df.empty else 0
 iv_comments = int(interval_df["comments_inc"].sum()) if not interval_df.empty else 0
 
-# ✅ 渲染“本期总增量”三项 KPI（与所选日期范围严格匹配）
 i1, i2, i3 = st.columns(3)
 i1.metric("本期总增量 · 播放量", f"{iv_views:,}")
 i2.metric("本期总增量 · 点赞数", f"{iv_likes:,}")
@@ -221,9 +219,7 @@ for _, row in filtered_latest.iterrows():
         st.write(f"**频道**：{row['channel_title']}")
         pub = row["published_at"]
         dcount = days_since(pub)
-        pub_text = (
-            pub.tz_convert("UTC").date().isoformat() if pd.notna(pub) else "未知"
-        )
+        pub_text = pub.tz_convert("UTC").date().isoformat() if pd.notna(pub) else "未知"
         st.write(f"**发布日期**：{pub_text}  ｜  **已发布**：{dcount} 天")
         c1, c2, c3 = st.columns(3)
         c1.metric("总播放量", f"{int(row['views']):,}")
@@ -247,7 +243,6 @@ for _, row in filtered_latest.iterrows():
             vhist["value"] = vhist[metric_col]
             y_title = f"{metric_cn}（累计）"
 
-        # 避免与上面 DataFrame 变量名 base 冲突
         chart_base = alt.Chart(vhist).encode(
             x=alt.X("date:T", title="日期"),
             y=alt.Y("value:Q", title=y_title),
