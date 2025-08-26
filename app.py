@@ -8,14 +8,14 @@ import streamlit as st
 
 st.set_page_config(page_title="YouTube Tracker", layout="wide")
 
-# 可选：页面自动刷新（若未安装则自动跳过）
+# 可选：页面自动刷新
 try:
     from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=5 * 60 * 1000, key="auto-refresh")  # 每5分钟刷新一次页面
+    st_autorefresh(interval=5 * 60 * 1000, key="auto-refresh")
 except Exception:
     pass
 
-# ---- 小样式：让左侧缩略图垂直居中 ----
+# ---- 小样式 ----
 st.markdown(
     """
 <style>
@@ -26,7 +26,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 每5分钟重新读一次 CSV（线上自动拿到最新数据）
 @st.cache_data(ttl=300)
 def load_data():
     df = pd.read_csv("data/history.csv")
@@ -34,9 +33,7 @@ def load_data():
     df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce", utc=True)
     return df
 
-
 def days_since(d):
-    """返回从发布时间到现在的天数；兼容 tz-naive / tz-aware。"""
     if pd.isna(d):
         return None
     if getattr(d, "tzinfo", None) is None:
@@ -46,11 +43,8 @@ def days_since(d):
     now_utc = pd.Timestamp.now(tz="UTC")
     return (now_utc - d_utc).days
 
-
 df = load_data()
-
-# 新增一列，取纯日期（方便和 date_input 的值对齐）
-df["day"] = df["date"].dt.date
+df["day"] = df["date"].dt.date   # ✅ 新增纯日期列
 
 st.title("📈 YouTube 视频追踪面板")
 
@@ -58,7 +52,7 @@ if df.empty:
     st.info("暂无数据，请先确保仓库中的 data/history.csv 已有内容。")
     st.stop()
 
-# ==== 数据最后更新时间（基于 CSV 内容 + 文件写入时间）====
+# ==== 数据最后更新时间 ====
 csv_last_ts = pd.to_datetime(df["date"], errors="coerce").max()
 last_file_time_la = None
 try:
@@ -73,13 +67,12 @@ except Exception:
 
 msg_left = (
     f"CSV 最新日期：**{csv_last_ts.tz_convert('UTC').date().isoformat()}**"
-    if pd.notna(csv_last_ts)
-    else "CSV 最新日期：**未知**"
+    if pd.notna(csv_last_ts) else "CSV 最新日期：**未知**"
 )
 msg_right = f"｜ 文件更新时间（LA）：**{last_file_time_la}**" if last_file_time_la else ""
 st.info(f"🕒 {msg_left} {msg_right}")
 
-# 每个视频最新一行（总计信息）
+# ==== 最新一行 ====
 latest = df.sort_values("date").groupby("video_id").tail(1).copy()
 latest = latest.sort_values("published_at", ascending=False, na_position="last")
 
@@ -87,12 +80,10 @@ latest = latest.sort_values("published_at", ascending=False, na_position="last")
 with st.sidebar:
     st.header("筛选 & 工具")
 
-    # 频道筛选（含 All）
     channels = sorted(latest["channel_title"].dropna().unique().tolist())
     channel_options = ["All"] + channels
     sel_channel = st.selectbox("按频道筛选", channel_options, index=0)
 
-    # 指标与数值模式
     metric_label = st.selectbox(
         "折线图指标", ["播放量 (Views)", "点赞数 (Likes)", "评论数 (Comments)"], index=0
     )
@@ -105,7 +96,6 @@ with st.sidebar:
 
     mode = st.radio("数值模式", ["累计", "每日增量"], index=0, horizontal=True)
 
-    # 日期范围（影响：折线图、顶部区间增量KPI）
     min_d = df["day"].min()
     max_d = df["day"].max()
     picked = st.date_input("折线图日期范围", [min_d, max_d])
@@ -114,7 +104,6 @@ with st.sidebar:
     else:
         start_day, end_day = (min_d, max_d)
 
-    # 排序依据
     sort_label = st.selectbox(
         "排序依据", ["按播放量", "按点赞数", "按评论数", "按发布日期（新→旧）"], index=3
     )
@@ -125,12 +114,10 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# 根据频道筛选
 filtered_latest = (
     latest if sel_channel == "All" else latest[latest["channel_title"] == sel_channel]
 )
 
-# 应用排序
 if sort_label == "按发布日期（新→旧）":
     filtered_latest = filtered_latest.sort_values(
         "published_at", ascending=False, na_position="last"
@@ -141,13 +128,16 @@ else:
 
 selected_ids = set(filtered_latest["video_id"].tolist())
 
-# 折线图数据：按日期范围过滤后的历史
+# ==== 日期范围过滤 ====
 show_df = df[df["video_id"].isin(selected_ids)].copy()
 show_df_for_chart = show_df[
     (show_df["day"] >= start_day) & (show_df["day"] <= end_day)
 ].copy()
 
-# 顶部 KPI 汇总（按当前日期筛选后的“区间增量”，全体视频）
+# ==== Debug 输出 ====
+st.info(f"🔍 Debug: 当前选择日期范围 = {start_day} → {end_day} ｜ show_df_for_chart 行数 = {show_df_for_chart.shape[0]}")
+
+# ==== KPI 计算 ====
 base = df[df["video_id"].isin(selected_ids)].sort_values(["video_id", "date"]).copy()
 for col in ["views", "likes", "comments"]:
     inc_col = f"{col}_inc"
@@ -160,17 +150,15 @@ iv_views = int(interval_df["views_inc"].sum()) if not interval_df.empty else 0
 iv_likes = int(interval_df["likes_inc"].sum()) if not interval_df.empty else 0
 iv_comments = int(interval_df["comments_inc"].sum()) if not interval_df.empty else 0
 
-# ====== KPI 展示 ======
 i1, i2, i3 = st.columns(3)
 i1.metric("本期总增量 · 播放量", f"{iv_views:,}")
 i2.metric("本期总增量 · 点赞数", f"{iv_likes:,}")
 i3.metric("本期总增量 · 评论数", f"{iv_comments:,}")
 
-# ====== 各视频单卡片 + 折线 ======
+# ====== 单视频折线 ======
 for _, row in filtered_latest.iterrows():
     vid = row["video_id"]
     col1, col2 = st.columns([1, 3])
-
     with col1:
         thumb = row.get("thumbnail_url", None)
         st.markdown("<div class='thumb-cell'>", unsafe_allow_html=True)
@@ -178,7 +166,6 @@ for _, row in filtered_latest.iterrows():
             st.image(thumb, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown(f"[▶️ 打开视频]({row['video_url']})")
-
     with col2:
         st.subheader(f"{row['title']}")
         st.write(f"**频道**：{row['channel_title']}")
@@ -195,8 +182,7 @@ for _, row in filtered_latest.iterrows():
 
         vhist = (
             show_df_for_chart[show_df_for_chart["video_id"] == vid]
-            .sort_values("date")
-            .copy()
+            .sort_values("date").copy()
         )
         if vhist.empty:
             st.info("当前日期范围内无数据")
@@ -218,11 +204,8 @@ for _, row in filtered_latest.iterrows():
                 alt.Tooltip("value:Q", title=y_title, format=","),
             ],
         )
-        line = base.mark_line()
-        points = base.mark_point(size=40)
-        labels = base.mark_text(dy=-8).encode(text=alt.Text("value:Q", format=","))
-
-        chart = (line + points + labels).properties(height=220)
+        chart = (base.mark_line() + base.mark_point(size=40) + 
+                 base.mark_text(dy=-8).encode(text=alt.Text("value:Q", format=","))).properties(height=220)
         st.altair_chart(chart, use_container_width=True)
 
 st.write("---")
