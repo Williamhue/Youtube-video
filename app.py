@@ -53,7 +53,7 @@ df = load_data()
 # ✅ 新增一列，取纯日期（方便和 date_input 的值对齐）
 df["day"] = df["date"].dt.date
 
-st.title("📈 YouTube 视频追踪面板")
+st.title("📈 YouTube 视频追踪")
 
 if df.empty:
     st.info("暂无数据，请先确保仓库中的 data/history.csv 已有内容。")
