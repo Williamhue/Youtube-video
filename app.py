@@ -197,6 +197,12 @@ iv_views = int(interval_df["views_inc"].sum()) if not interval_df.empty else 0
 iv_likes = int(interval_df["likes_inc"].sum()) if not interval_df.empty else 0
 iv_comments = int(interval_df["comments_inc"].sum()) if not interval_df.empty else 0
 
+# ✅ 渲染“本期总增量”三项 KPI（与所选日期范围严格匹配）
+i1, i2, i3 = st.columns(3)
+i1.metric("本期总增量 · 播放量", f"{iv_views:,}")
+i2.metric("本期总增量 · 点赞数", f"{iv_likes:,}")
+i3.metric("本期总增量 · 评论数", f"{iv_comments:,}")
+
 # ====== 各视频单卡片 + 折线（带点与数值标签） ======
 for _, row in filtered_latest.iterrows():
     vid = row["video_id"]
@@ -241,7 +247,8 @@ for _, row in filtered_latest.iterrows():
             vhist["value"] = vhist[metric_col]
             y_title = f"{metric_cn}（累计）"
 
-        base = alt.Chart(vhist).encode(
+        # 避免与上面 DataFrame 变量名 base 冲突
+        chart_base = alt.Chart(vhist).encode(
             x=alt.X("date:T", title="日期"),
             y=alt.Y("value:Q", title=y_title),
             tooltip=[
@@ -249,9 +256,9 @@ for _, row in filtered_latest.iterrows():
                 alt.Tooltip("value:Q", title=y_title, format=","),
             ],
         )
-        line = base.mark_line()
-        points = base.mark_point(size=40)
-        labels = base.mark_text(dy=-8).encode(text=alt.Text("value:Q", format=","))
+        line = chart_base.mark_line()
+        points = chart_base.mark_point(size=40)
+        labels = chart_base.mark_text(dy=-8).encode(text=alt.Text("value:Q", format=","))
 
         chart = (line + points + labels).properties(height=220)
         st.altair_chart(chart, use_container_width=True)
