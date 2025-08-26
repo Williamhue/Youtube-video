@@ -182,20 +182,20 @@ k4.metric("Like Rate（点赞率）", f"{like_rate:.2f}%")
 k5.metric("Comment Rate（评论率）", f"{comment_rate:.2f}%")
 
 # 顶部 KPI 汇总（按当前日期筛选后的“区间增量”，全体视频）
-interval_df = show_df_for_chart.sort_values(["video_id", "date"]).copy()
+# 关键点：在“全量历史”上先计算每日增量，再按所选日期范围过滤
+base = df[df["video_id"].isin(selected_ids)].sort_values(["video_id", "date"]).copy()
+
 for col in ["views", "likes", "comments"]:
     inc_col = f"{col}_inc"
-    interval_df[inc_col] = interval_df.groupby("video_id")[col].diff().fillna(0)
-    interval_df.loc[interval_df[inc_col] < 0, inc_col] = 0
+    base[inc_col] = base.groupby("video_id")[col].diff().fillna(0)
+    base.loc[base[inc_col] < 0, inc_col] = 0  # 防抖：出现回退时不计负增量
+
+# 现在再用所选日期范围切片，保证区间第一天也能拿到正确的增量
+interval_df = base[(base["date"] >= start_ts) & (base["date"] <= end_ts)].copy()
 
 iv_views = int(interval_df["views_inc"].sum()) if not interval_df.empty else 0
 iv_likes = int(interval_df["likes_inc"].sum()) if not interval_df.empty else 0
 iv_comments = int(interval_df["comments_inc"].sum()) if not interval_df.empty else 0
-
-i1, i2, i3 = st.columns(3)
-i1.metric("本期总增量 · 播放量", f"{iv_views:,}")
-i2.metric("本期总增量 · 点赞数", f"{iv_likes:,}")
-i3.metric("本期总增量 · 评论数", f"{iv_comments:,}")
 
 # ====== 各视频单卡片 + 折线（带点与数值标签） ======
 for _, row in filtered_latest.iterrows():
