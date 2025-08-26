@@ -1,6 +1,6 @@
 # app.py —— 只读 CSV 的 Streamlit 看板（无外部 API 调用）
 import os
-from datetime import date
+from datetime import date, timedelta
 
 import altair as alt
 import pandas as pd
@@ -26,14 +26,27 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 每5分钟重新读一次 CSV（线上自动拿到最新数据）
-@st.cache_data(ttl=300)
-def load_data():
-    df = pd.read_csv("data/history.csv")
-    df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
-    # published_at 可能自带/不带时区，这里统一解析为带 tz 的时间
-    df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce", utc=True)
-    return df
+# ====== 工具函数 ======
+def coerce_date_range(picked, fallback_start, fallback_end):
+    """把 st.date_input 的返回值（tuple/list/single）规范化为 (start_date, end_date)。"""
+    if isinstance(picked, (list, tuple)):
+        if len(picked) == 2:
+            s, e = picked
+        elif len(picked) == 1:
+            s, e = picked[0], picked[0]
+        else:
+            s, e = fallback_start, fallback_end
+    else:
+        # 单日模式
+        s, e = picked, picked
+
+    # 兜底：空值则回退
+    s = s or fallback_start
+    e = e or fallback_end
+    # 若用户误选“开始 > 结束”，则对调
+    if s > e:
+        s, e = e, s
+    return s, e
 
 
 def days_since(d):
@@ -48,6 +61,17 @@ def days_since(d):
     return (now_utc - d_utc).days
 
 
+# 每5分钟重新读一次 CSV（线上自动拿到最新数据）
+@st.cache_data(ttl=300)
+def load_data():
+    df = pd.read_csv("data/history.csv")
+    # 关键列统一为 tz-aware UTC
+    df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
+    df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce", utc=True)
+    return df
+
+
+# ====== 主体 ======
 df = load_data()
 
 st.title("📈 YouTube 视频追踪面板")
@@ -56,7 +80,7 @@ if df.empty:
     st.info("暂无数据，请先确保仓库中的 data/history.csv 已有内容。")
     st.stop()
 
-# ==== 数据最后更新时间（基于 CSV 内容 + 文件写入时间）====
+# ---- 数据最后更新时间（基于 CSV 内容 + 文件写入时间）----
 csv_last_ts = pd.to_datetime(df["date"], errors="coerce").max()
 last_file_time_la = None
 try:
@@ -77,9 +101,8 @@ msg_left = (
 msg_right = f"｜ 文件更新时间（LA）：**{last_file_time_la}**" if last_file_time_la else ""
 st.info(f"🕒 {msg_left} {msg_right}")
 
-# 每个视频最新一行（总计信息）
-latest = df.sort_values("date").groupby("video_id").tail(1).copy()
-# 默认按发布日期倒序（新→旧）
+# ---- 计算“每个视频最新一行”与默认排序 ----
+latest = df.sort_values("date").groupby("video_id", as_index=False).tail(1).copy()
 latest = latest.sort_values("published_at", ascending=False, na_position="last")
 
 # -------- 侧边筛选 --------
@@ -89,11 +112,11 @@ with st.sidebar:
     # 频道筛选（含 All）
     channels = sorted(latest["channel_title"].dropna().unique().tolist())
     channel_options = ["All"] + channels
-    sel_channel = st.selectbox("按频道筛选", channel_options, index=0)
+    sel_channel = st.selectbox("按频道筛选", channel_options, index=0, key="channel_select")
 
     # 指标与数值模式
     metric_label = st.selectbox(
-        "折线图指标", ["播放量 (Views)", "点赞数 (Likes)", "评论数 (Comments)"], index=0
+        "折线图指标", ["播放量 (Views)", "点赞数 (Likes)", "评论数 (Comments)"], index=0, key="metric_select"
     )
     metric_map = {
         "播放量 (Views)": ("views", "播放量"),
@@ -102,7 +125,7 @@ with st.sidebar:
     }
     metric_col, metric_cn = metric_map[metric_label]
 
-    mode = st.radio("数值模式", ["累计", "每日增量"], index=0, horizontal=True)
+    mode = st.radio("数值模式", ["累计", "每日增量"], index=0, horizontal=True, key="mode_radio")
 
     # 日期范围（影响：折线图、顶部区间增量KPI）
     min_d = df["date"].min()
@@ -111,18 +134,20 @@ with st.sidebar:
     min_date = min_d.tz_convert("UTC").date() if pd.notna(min_d) else date.today()
     max_date = max_d.tz_convert("UTC").date() if pd.notna(max_d) else date.today()
 
-    picked = st.date_input("折线图日期范围", [min_date, max_date])
-    # 兼容 tuple/list；并做“开始>结束”时自动对调
-    if isinstance(picked, (list, tuple)) and len(picked) == 2:
-        start_date, end_date = picked
-        if start_date > end_date:
-            start_date, end_date = end_date, start_date
-    else:
-        start_date, end_date = (min_date, max_date)
+    # 增加 key 与 on_change 确保变更即触发重算
+    picked = st.date_input(
+        "折线图日期范围",
+        value=(min_date, max_date),
+        key="date_range",
+    )
+    start_date, end_date = coerce_date_range(picked, min_date, max_date)
+
+    # 侧栏可视化回显（便于你核对当前值）
+    st.caption(f"已选日期：{start_date} → {end_date}")
 
     # 排序依据（含“按发布日期（新→旧）”）
     sort_label = st.selectbox(
-        "排序依据", ["按播放量", "按点赞数", "按评论数", "按发布日期（新→旧）"], index=3
+        "排序依据", ["按播放量", "按点赞数", "按评论数", "按发布日期（新→旧）"], index=3, key="sort_select"
     )
     sort_map = {"按播放量": "views", "按点赞数": "likes", "按评论数": "comments"}
 
@@ -133,41 +158,33 @@ with st.sidebar:
         st.rerun()
 
 # 根据频道筛选
-filtered_latest = (
-    latest if sel_channel == "All" else latest[latest["channel_title"] == sel_channel]
-)
+filtered_latest = latest if sel_channel == "All" else latest[latest["channel_title"] == sel_channel]
 
 # 应用排序
 if sort_label == "按发布日期（新→旧）":
-    filtered_latest = filtered_latest.sort_values(
-        "published_at", ascending=False, na_position="last"
-    )
+    filtered_latest = filtered_latest.sort_values("published_at", ascending=False, na_position="last")
 else:
     sort_col = sort_map[sort_label]
     filtered_latest = filtered_latest.sort_values(sort_col, ascending=False)
 
 selected_ids = set(filtered_latest["video_id"].tolist())
 
-# 折线图数据：按日期范围过滤后的历史
-show_df = df[df["video_id"].isin(selected_ids)].copy()
-start_ts = pd.to_datetime(start_date)  # naive
-end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # naive
-# 注意：df["date"] 是带 tz 的，比较时将过滤边界转为 UTC 带 tz
-start_ts = start_ts.tz_localize("UTC")
-end_ts = end_ts.tz_localize("UTC")
+# ---- 将日期边界规范为 UTC 的闭区间 [start, end] ----
+start_ts_utc = pd.to_datetime(start_date).tz_localize("UTC")
+end_ts_utc = (pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)).tz_localize("UTC")
 
-show_df_for_chart = show_df[(show_df["date"] >= start_ts) & (show_df["date"] <= end_ts)].copy()
+# ---- 历史筛选（供图表/对比使用） ----
+hist_df = df[df["video_id"].isin(selected_ids)].copy()
+show_df_for_chart = hist_df[(hist_df["date"] >= start_ts_utc) & (hist_df["date"] <= end_ts_utc)].copy()
 
 # 如果选择的结束日期 > 数据最新日期，提示
 data_max_day = max_date
 if data_max_day and end_date > data_max_day:
-    st.warning(
-        f"所选结束日期 **{end_date}** 超过当前数据最新日期 **{data_max_day}**，图表只显示到 {data_max_day}。"
-    )
+    st.warning(f"所选结束日期 **{end_date}** 超过当前数据最新日期 **{data_max_day}**，图表只显示到 {data_max_day}。")
 
 st.caption(f"数据按天记录；频道：{sel_channel} ｜ 视频数：{filtered_latest.shape[0]}")
 
-# 全局 KPI（总量/率）：针对当前频道筛选（各视频“最新一行”加总）
+# ---- 全局 KPI（总量/率）：针对当前频道筛选（各视频“最新一行”加总） ----
 kpi_scope = filtered_latest.copy()
 total_views = int(kpi_scope["views"].sum())
 total_likes = int(kpi_scope["likes"].sum())
@@ -190,7 +207,7 @@ for col in ["views", "likes", "comments"]:
     base_df[inc_col] = base_df.groupby("video_id")[col].diff().fillna(0)
     base_df.loc[base_df[inc_col] < 0, inc_col] = 0  # 防抖：出现回退时不计负增量
 
-interval_df = base_df[(base_df["date"] >= start_ts) & (base_df["date"] <= end_ts)].copy()
+interval_df = base_df[(base_df["date"] >= start_ts_utc) & (base_df["date"] <= end_ts_utc)].copy()
 
 iv_views = int(interval_df["views_inc"].sum()) if not interval_df.empty else 0
 iv_likes = int(interval_df["likes_inc"].sum()) if not interval_df.empty else 0
@@ -226,11 +243,7 @@ for _, row in filtered_latest.iterrows():
         c2.metric("总点赞数", f"{int(row['likes']):,}")
         c3.metric("总评论数", f"{int(row['comments']):,}")
 
-        vhist = (
-            show_df_for_chart[show_df_for_chart["video_id"] == vid]
-            .sort_values("date")
-            .copy()
-        )
+        vhist = show_df_for_chart[show_df_for_chart["video_id"] == vid].sort_values("date").copy()
         if vhist.empty:
             st.info("当前日期范围内无数据")
             continue
@@ -273,6 +286,7 @@ compare_labels = st.multiselect(
     "选择参与对比的视频",
     options=[label_map[v] for v in default_compare_ids],
     default=[label_map[v] for v in default_compare_ids],
+    key="compare_select",
 )
 compare_ids = {vid for vid, label in label_map.items() if label in compare_labels}
 
