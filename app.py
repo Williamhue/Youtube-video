@@ -37,13 +37,9 @@ def coerce_date_range(picked, fallback_start, fallback_end):
         else:
             s, e = fallback_start, fallback_end
     else:
-        # 单日模式
         s, e = picked, picked
-
-    # 兜底：空值则回退
     s = s or fallback_start
     e = e or fallback_end
-    # 若用户误选“开始 > 结束”，则对调
     if s > e:
         s, e = e, s
     return s, e
@@ -64,10 +60,26 @@ def days_since(d):
 # 每5分钟重新读一次 CSV（线上自动拿到最新数据）
 @st.cache_data(ttl=300)
 def load_data():
-    df = pd.read_csv("data/history.csv")
-    # 关键列统一为 tz-aware UTC
+    # 读取并清洗
+    with open("data/history.csv", "rb") as f:
+        raw = f.read()
+    # 去掉 UTF-8 BOM（如果有）
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    from io import BytesIO
+    df = pd.read_csv(BytesIO(raw))
+
+    # 列名与字符串值去除首尾空白
+    df.columns = df.columns.map(lambda c: str(c).strip())
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].astype(str).str.strip()
+
+    # 关键列：统一为 tz-aware UTC
+    # 你的样例是 'YYYY-MM-DD'，这里强制以 UTC 00:00 解析
     df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
-    df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce", utc=True)
+    df["published_at"] = pd.to_datetime(df.get("published_at"), errors="coerce", utc=True)
+
     return df
 
 
@@ -76,8 +88,8 @@ df = load_data()
 
 st.title("📈 YouTube 视频追踪面板")
 
-if df.empty:
-    st.info("暂无数据，请先确保仓库中的 data/history.csv 已有内容。")
+if df.empty or df["date"].isna().all():
+    st.error("无法解析 data/history.csv 的日期列。请检查是否存在隐藏空格/BOM 或日期格式异常。")
     st.stop()
 
 # ---- 数据最后更新时间（基于 CSV 内容 + 文件写入时间）----
@@ -134,15 +146,12 @@ with st.sidebar:
     min_date = min_d.tz_convert("UTC").date() if pd.notna(min_d) else date.today()
     max_date = max_d.tz_convert("UTC").date() if pd.notna(max_d) else date.today()
 
-    # 增加 key 与 on_change 确保变更即触发重算
     picked = st.date_input(
         "折线图日期范围",
         value=(min_date, max_date),
         key="date_range",
     )
     start_date, end_date = coerce_date_range(picked, min_date, max_date)
-
-    # 侧栏可视化回显（便于你核对当前值）
     st.caption(f"已选日期：{start_date} → {end_date}")
 
     # 排序依据（含“按发布日期（新→旧）”）
@@ -316,7 +325,7 @@ else:
             tooltip=[
                 alt.Tooltip("label:N", title="视频"),
                 alt.Tooltip("date:T", title="日期"),
-                alt.Tooltip("value:Q", title=y_title, format=","),
+                alt.Tooltip("value:Q", title=y标题, format=","),
             ],
         )
     ).add_params(legend_sel)
@@ -328,69 +337,11 @@ else:
     compare_chart = (line_cmp + points_cmp + labels_cmp).properties(height=360)
     st.altair_chart(compare_chart, use_container_width=True)
 
-    # === 对比表格（直观汇总，仅保留下载表格 CSV） ===
-    meta_cols = ["channel_title", "title", "published_at", "video_url"]
-    meta_map = filtered_latest.set_index("video_id")[meta_cols].to_dict(orient="index")
-
-    rows = []
-    for vid, g in cmp.groupby("video_id"):
-        g = g.sort_values("date")
-        first_dt = g["date"].min()
-        last_dt = g["date"].max()
-        points_cnt = g.shape[0]
-        if mode == "每日增量":
-            metric_val = g["value"].sum()                # 区间总增量
-            peak_val = g["value"].max()                  # 最大单日增量
-            metric_label_cn = f"{metric_cn} · 区间总增量"
-            peak_label_cn = f"最大单日增量"
-        else:
-            metric_val = g["value"].iloc[-1]             # 区间末值（累计）
-            peak_val = g["value"].max()                  # 累计最大值（一般=末值）
-            metric_label_cn = f"{metric_cn} · 区间末值"
-            peak_label_cn = f"区间最大值"
-
-        avg_val = g["value"].mean() if points_cnt > 0 else 0
-
-        meta = meta_map.get(vid, {})
-        pub = meta.get("published_at")
-        pub_text = (
-            pd.to_datetime(pub, utc=True).tz_convert("UTC").date().isoformat()
-            if pd.notna(pub) else "—"
-        )
-
-        rows.append({
-            "视频标题": meta.get("title", "—"),
-            "频道": meta.get("channel_title", "—"),
-            "视频ID": vid,
-            "发布日期": pub_text,
-            "区间开始": first_dt.tz_convert("UTC").date().isoformat(),
-            "区间结束": last_dt.tz_convert("UTC").date().isoformat(),
-            metric_label_cn: int(metric_val) if pd.notna(metric_val) else 0,
-            "日均值": round(avg_val, 2) if pd.notna(avg_val) else 0,
-            peak_label_cn: int(peak_val) if pd.notna(peak_val) else 0,
-            "链接": meta.get("video_url", "—"),
-        })
-
-    summary_df = pd.DataFrame(rows)
-
-    st.markdown("#### 📋 对比表格（当前指标 & 模式下的区间表现）")
-    st.dataframe(
-        summary_df[
-            ["视频标题", "频道", "视频ID", "发布日期", "区间开始", "区间结束",
-             metric_label_cn, "日均值", peak_label_cn, "链接"]
-        ],
-        use_container_width=True,
-        hide_index=True
-    )
-
-    # 仅保留：下载表格 CSV
-    table_csv = summary_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="⬇️ 下载对比表格（CSV）",
-        data=table_csv,
-        file_name="compare_table.csv",
-        mime="text/csv",
-    )
-
 st.write("---")
+# ---- DEBUG：帮助你快速判断过滤是否生效 ----
+st.caption(
+    f"DEBUG · 当前区间：{start_ts_utc.date()} → {end_ts_utc.date()} · "
+    f"过滤后样本行数：{show_df_for_chart.shape[0]}"
+)
+
 st.caption("数据来源：data/history.csv（由定时任务更新）。时区：America/Los_Angeles。")
